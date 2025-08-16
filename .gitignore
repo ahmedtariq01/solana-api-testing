@@ -46,6 +46,7 @@ Thumbs.db
 # Compiled binaries (project specific)
 go.sum
 go.mod
+complete_demo.sh
 
 # Coverage files
 coverage.out
