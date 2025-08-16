@@ -12,6 +12,7 @@ import (
 
 	"solana-balance-api/internal/config"
 	"solana-balance-api/internal/models"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/stretchr/testify/assert"
