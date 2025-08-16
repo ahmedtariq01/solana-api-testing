@@ -12,6 +12,7 @@ import (
 
 	"solana-balance-api/internal/config"
 	"solana-balance-api/internal/models"
+	"github.com/gin-gonic/gin"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,43 +243,50 @@ func testConnectionPooling(t *testing.T, router http.Handler) {
 }
 
 func setupTestRouter(server *Server) http.Handler {
-	// This would set up a test version of the router
-	// For now, we'll return a simple handler that simulates the behavior
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simple test implementation
-		if r.URL.Path == "/metrics" {
-			// Return mock metrics
-			metrics := map[string]interface{}{
-				"service": "solana-balance-api",
-				"performance": map[string]interface{}{
-					"total_requests":      10,
-					"successful_requests": 10,
-					"cache_hits":          5,
-					"cache_misses":        5,
-					"rpc_calls":           5,
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(metrics)
+	// Build a real Gin engine that uses the server's middleware and routes so
+	// tests exercise the actual cache, mutex and metrics logic.
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+
+	// Use the server's middleware and routes (these are helpers on Server)
+	server.setupMiddleware(engine)
+	// We cannot use the server's auth middleware because it talks to MongoDB.
+	// Register routes manually and add a lightweight test auth middleware
+	// that accepts the fixed test API key used by tests.
+
+	// Test auth middleware
+	testAuth := func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing API key"})
+			c.Abort()
 			return
 		}
-
-		if r.URL.Path == "/api/get-balance" {
-			// Return mock balance response
-			response := models.BalanceResponse{
-				Balances: []models.WalletBalance{
-					{
-						Address: "11111111111111111111111111111112",
-						Balance: 1.5,
-					},
-				},
-				Cached: false,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+		apiKey := authHeader
+		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+			apiKey = authHeader[7:]
+		}
+		if apiKey != "test-api-key" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+			c.Abort()
 			return
 		}
+		c.Next()
+	}
 
-		w.WriteHeader(http.StatusNotFound)
-	})
+	// Health routes
+	server.router.SetupHealthRoutes(engine)
+
+	// API routes with test auth
+	api := engine.Group("/api")
+	api.Use(testAuth)
+	{
+		api.POST("/get-balance", server.router.GetBalanceHandler().GetBalance)
+	}
+
+	// Metrics and status handlers
+	engine.GET("/metrics", server.metricsHandler)
+	engine.GET("/status", server.statusHandler)
+
+	return engine
 }
